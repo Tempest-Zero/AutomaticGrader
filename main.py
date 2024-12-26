@@ -22,7 +22,7 @@ def read_csv_data(uploaded_file) -> pd.DataFrame:
     """
     Reads a CSV file containing 'StudentID' and 'Score'.
     Raises an exception if columns are missing, or if 'Score' is not numeric,
-    or if file read fails.
+    or if file read fails. Additionally, flags scores outside 0-100.
     """
     try:
         df = pd.read_csv(uploaded_file)
@@ -51,8 +51,13 @@ def read_csv_data(uploaded_file) -> pd.DataFrame:
             "Please clean the data and upload again."
         )
 
-    return df
+    # Flag scores outside 0-100
+    df['Outlier'] = df['Score'].apply(lambda x: 'Yes' if x < 0 or x > 100 else 'No')
+    outlier_count = df['Outlier'].value_counts().get('Yes', 0)
+    if outlier_count > 0:
+        st.warning(f"⚠️ Found {outlier_count} outlier(s) with scores outside the 0-100 range.")
 
+    return df
 
 def assign_absolute_grade(score, thresholds=None):
     """
@@ -72,7 +77,6 @@ def assign_absolute_grade(score, thresholds=None):
     else:
         return 'F'
 
-
 def transform_scores_normal_curve(df: pd.DataFrame) -> pd.DataFrame:
     """
     Converts 'Score' into z-scores (AdjustedScore).
@@ -88,7 +92,6 @@ def transform_scores_normal_curve(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df_new['AdjustedScore'] = (df['Score'] - mean_) / std_
     return df_new
-
 
 def assign_letter_grades_from_percentiles(df: pd.DataFrame, grade_col='FinalGrade') -> pd.DataFrame:
     """
@@ -121,30 +124,38 @@ def assign_letter_grades_from_percentiles(df: pd.DataFrame, grade_col='FinalGrad
     df_new[grade_col] = letter_grades
     return df_new
 
-
 def plot_distribution(df, col='Score', title='Score Distribution'):
     """
     Plots a histogram + KDE + (optional) normal PDF for the chosen column.
+    Highlights outliers in a different color.
     """
     fig, ax = plt.subplots(figsize=(7,4))
-    sns.histplot(df[col], bins=15, stat='density', color='skyblue',
-                 alpha=0.6, edgecolor='black', label='Histogram', ax=ax)
-    sns.kdeplot(df[col], color='blue', linewidth=2, label='KDE', ax=ax)
-
-    mean_val = df[col].mean()
-    std_val = df[col].std()
+    
+    # Separate outliers
+    normal_scores = df[df['Outlier'] == 'No'][col]
+    outlier_scores = df[df['Outlier'] == 'Yes'][col]
+    
+    sns.histplot(normal_scores, bins=15, stat='density', color='skyblue',
+                 alpha=0.6, edgecolor='black', label='Normal Scores', ax=ax)
+    if not outlier_scores.empty:
+        sns.histplot(outlier_scores, bins=15, stat='density', color='red',
+                     alpha=0.6, edgecolor='black', label='Outliers', ax=ax)
+    
+    sns.kdeplot(normal_scores, color='blue', linewidth=2, label='KDE (Normal)', ax=ax)
+    
+    mean_val = normal_scores.mean()
+    std_val = normal_scores.std()
     if std_val > 0:
         # Theoretical Normal PDF
-        x_vals = np.linspace(df[col].min(), df[col].max(), 200)
+        x_vals = np.linspace(normal_scores.min(), normal_scores.max(), 200)
         pdf_vals = norm.pdf(x_vals, loc=mean_val, scale=std_val)
         ax.plot(x_vals, pdf_vals, 'r--', lw=2, label='Normal PDF')
-
+    
     ax.set_title(title)
     ax.set_xlabel(col)
     ax.set_ylabel("Density")
     ax.legend()
     st.pyplot(fig)
-
 
 def plot_grade_distribution(df, grade_col='Grade', title='Grade Distribution'):
     """
@@ -157,7 +168,6 @@ def plot_grade_distribution(df, grade_col='Grade', title='Grade Distribution'):
     ax.set_xlabel("Grade")
     ax.set_ylabel("Count")
     st.pyplot(fig)
-
 
 def plot_grade_vs_score(df, grade_col='Grade', score_col='Score',
                         all_grades=None, title='Average Score by Grade'):
@@ -183,11 +193,12 @@ def plot_grade_vs_score(df, grade_col='Grade', score_col='Score',
     ax.set_title(title)
     ax.set_xlabel("Grade")
     ax.set_ylabel(f"Average {score_col}")
-    # Adjust y-axis limit assuming typical score range is 0 to 100
-    # Feel free to modify if your scoring range is different
-    ax.set_ylim(0, 100)
+    
+    # Adjust y-axis limits based on data
+    lower_lim = max(0, df[score_col].min() - 10)
+    upper_lim = min(100, df[score_col].max() + 10)
+    ax.set_ylim(lower_lim, upper_lim)
     st.pyplot(fig)
-
 
 def plot_iqr_boxplot(df, col='Score', title='Box Plot - Outliers based on IQR'):
     """
@@ -216,13 +227,11 @@ def plot_iqr_boxplot(df, col='Score', title='Box Plot - Outliers based on IQR'):
 
     st.pyplot(fig)
 
-
 def convert_df_to_csv(df: pd.DataFrame) -> str:
     """
     Convert a DataFrame to CSV for download.
     """
     return df.to_csv(index=False)
-
 
 # -----------------------------
 # Main Streamlit App
@@ -236,12 +245,13 @@ def main():
        - **StudentID** (string or integer)
        - **Score** (numeric)
     2. **No missing values** are allowed in StudentID or Score.
-    3. **Choose** a grading method (Absolute or Relative).
-    4. **View** distribution plots and final grade counts.
-    5. **See** a line chart of *Grade vs. Average Score*.
-    6. **Check** how many got a specific Grade at each Score.
-    7. **Download** a CSV with final grades.
-    8. **See** an IQR-based boxplot for outliers.
+    3. **Scores should be between 0 and 100**. Outliers will be flagged.
+    4. **Choose** a grading method (Absolute or Relative).
+    5. **View** distribution plots and final grade counts.
+    6. **See** a line chart of *Grade vs. Average Score*.
+    7. **Check** how many got a specific Grade at each Score.
+    8. **Download** a CSV with final grades and outlier flags.
+    9. **See** an IQR-based boxplot for outliers.
 
     **Important**: If your CSV doesn't follow these guidelines,
     you'll see an error message below with instructions on how to correct it.
@@ -266,6 +276,11 @@ def main():
     st.subheader("Data Preview")
     st.dataframe(df.head())
 
+    # Highlight outliers in the data preview
+    if 'Outlier' in df.columns and df['Outlier'].str.contains('Yes').any():
+        st.markdown("### ⚠️ Outliers Detected")
+        st.write(df[df['Outlier'] == 'Yes'])
+
     # 2. Choose Grading Method
     grading_method = st.selectbox(
         "Choose a Grading Method",
@@ -282,7 +297,7 @@ def main():
         st.json(thresholds)
 
         # Show data with assigned grades
-        st.dataframe(df[["StudentID", "Score", "Grade"]].head())
+        st.dataframe(df[["StudentID", "Score", "Grade", "Outlier"]].head())
 
         # Plot Score Distribution
         plot_distribution(df, col="Score", title="Score Distribution (Absolute)")
@@ -310,7 +325,7 @@ def main():
 
         # Provide a CSV download for final results
         st.subheader("Download Final Grades (Absolute)")
-        abs_csv = convert_df_to_csv(df[["StudentID", "Score", "Grade"]])
+        abs_csv = convert_df_to_csv(df[["StudentID", "Score", "Grade", "Outlier"]])
         st.download_button(
             label="Download CSV",
             data=abs_csv,
@@ -327,7 +342,12 @@ def main():
         df_grades.rename(columns={"FinalGrade": "Grade"}, inplace=True)
 
         # Show a sample of the data with adjusted (z-scores)
-        st.dataframe(df_grades[["StudentID", "Score", "AdjustedScore", "Grade"]].head())
+        st.dataframe(df_grades[["StudentID", "Score", "AdjustedScore", "Grade", "Outlier"]].head())
+
+        # Highlight outliers in the transformed data
+        if 'Outlier' in df_grades.columns and df_grades['Outlier'].str.contains('Yes').any():
+            st.markdown("### ⚠️ Outliers Detected")
+            st.write(df_grades[df_grades['Outlier'] == 'Yes'])
 
         # Plot raw Score distribution
         plot_distribution(df_grades, col="Score", title="Raw Score Distribution (Relative)")
@@ -370,7 +390,7 @@ def main():
 
         # Provide a CSV download for final results
         st.subheader("Download Final Grades (Relative)")
-        rel_csv = convert_df_to_csv(df_grades[["StudentID", "Score", "AdjustedScore", "Grade"]])
+        rel_csv = convert_df_to_csv(df_grades[["StudentID", "Score", "AdjustedScore", "Grade", "Outlier"]])
         st.download_button(
             label="Download CSV",
             data=rel_csv,
@@ -378,8 +398,7 @@ def main():
             mime="text/csv"
         )
 
-    st.success("Grading and analysis completed successfully!")
-
+    st.success("🎉 Grading and analysis completed successfully!")
 
 if __name__ == "__main__":
     main()

@@ -21,17 +21,38 @@ sns.set_theme(style='whitegrid', palette='pastel')
 def read_csv_data(uploaded_file) -> pd.DataFrame:
     """
     Reads a CSV file containing 'StudentID' and 'Score'.
-    Raises an exception if columns are missing or file read fails.
+    Raises an exception if columns are missing, or if 'Score' is not numeric,
+    or if file read fails.
     """
     try:
         df = pd.read_csv(uploaded_file)
     except Exception as e:
-        raise Exception(f"Error while reading the CSV: {e}")
+        raise ValueError(f"Could not read the file. Please ensure it is a valid CSV. Details: {e}")
 
     required_cols = {'StudentID', 'Score'}
     if not required_cols.issubset(df.columns):
-        raise ValueError(f"CSV must have columns {required_cols}")
+        raise ValueError(
+            f"CSV must have the columns: {required_cols}. "
+            f"Found columns: {list(df.columns)}.\n"
+            "Please recheck the CSV file format."
+        )
+
+    # Check if 'Score' is numeric
+    if not pd.api.types.is_numeric_dtype(df['Score']):
+        raise ValueError(
+            "Column 'Score' must contain numeric values only. "
+            "Please make sure your CSV's 'Score' column is numeric."
+        )
+
+    # Check for missing values in 'StudentID' or 'Score'
+    if df[['StudentID', 'Score']].isnull().any().any():
+        raise ValueError(
+            "Found missing values in 'StudentID' or 'Score'. "
+            "Please clean the data and upload again."
+        )
+
     return df
+
 
 def assign_absolute_grade(score, thresholds=None):
     """
@@ -51,6 +72,7 @@ def assign_absolute_grade(score, thresholds=None):
     else:
         return 'F'
 
+
 def transform_scores_normal_curve(df: pd.DataFrame) -> pd.DataFrame:
     """
     Converts 'Score' into z-scores (AdjustedScore).
@@ -67,12 +89,14 @@ def transform_scores_normal_curve(df: pd.DataFrame) -> pd.DataFrame:
         df_new['AdjustedScore'] = (df['Score'] - mean_) / std_
     return df_new
 
+
 def assign_letter_grades_from_percentiles(df: pd.DataFrame, grade_col='FinalGrade') -> pd.DataFrame:
     """
     Assigns letter grades (A,B,C,D,F) by percentile cutoffs in a normal distribution.
     """
     df_new = df.copy()
     if 'AdjustedScore' not in df_new.columns:
+        # If not found, just assume AdjustedScore = Score
         df_new['AdjustedScore'] = df_new['Score']
 
     z_scores = df_new['AdjustedScore']
@@ -97,6 +121,7 @@ def assign_letter_grades_from_percentiles(df: pd.DataFrame, grade_col='FinalGrad
     df_new[grade_col] = letter_grades
     return df_new
 
+
 def plot_distribution(df, col='Score', title='Score Distribution'):
     """
     Plots a histogram + KDE + (optional) normal PDF for the chosen column.
@@ -120,6 +145,7 @@ def plot_distribution(df, col='Score', title='Score Distribution'):
     ax.legend()
     st.pyplot(fig)
 
+
 def plot_grade_distribution(df, grade_col='Grade', title='Grade Distribution'):
     """
     Bar chart showing how many students got each grade.
@@ -131,6 +157,7 @@ def plot_grade_distribution(df, grade_col='Grade', title='Grade Distribution'):
     ax.set_xlabel("Grade")
     ax.set_ylabel("Count")
     st.pyplot(fig)
+
 
 def plot_grade_vs_score(df, grade_col='Grade', score_col='Score',
                         all_grades=None, title='Average Score by Grade'):
@@ -156,8 +183,11 @@ def plot_grade_vs_score(df, grade_col='Grade', score_col='Score',
     ax.set_title(title)
     ax.set_xlabel("Grade")
     ax.set_ylabel(f"Average {score_col}")
+    # Adjust y-axis limit assuming typical score range is 0 to 100
+    # Feel free to modify if your scoring range is different
     ax.set_ylim(0, 100)
     st.pyplot(fig)
+
 
 def plot_iqr_boxplot(df, col='Score', title='Box Plot - Outliers based on IQR'):
     """
@@ -186,11 +216,13 @@ def plot_iqr_boxplot(df, col='Score', title='Box Plot - Outliers based on IQR'):
 
     st.pyplot(fig)
 
+
 def convert_df_to_csv(df: pd.DataFrame) -> str:
     """
     Convert a DataFrame to CSV for download.
     """
     return df.to_csv(index=False)
+
 
 # -----------------------------
 # Main Streamlit App
@@ -199,25 +231,36 @@ def main():
     st.title("📊 Grading System: Absolute vs. Relative Grading")
 
     st.markdown("""
-    This app lets you:
-    1. **Upload** a CSV with **StudentID** and **Score**.
-    2. **Choose** Absolute or Relative grading.
-    3. **View** distribution plots and final grade counts.
-    4. **See** a line chart of *Grade vs. Average Score*.
-    5. **Check** how many got a specific Grade at each Score.
-    6. **Download** a CSV with final grades.
-    7. **See** an IQR-based boxplot for outliers.
+    ## Instructions
+    1. **Upload** a CSV file with the **columns**:
+       - **StudentID** (string or integer)
+       - **Score** (numeric)
+    2. **No missing values** are allowed in StudentID or Score.
+    3. **Choose** a grading method (Absolute or Relative).
+    4. **View** distribution plots and final grade counts.
+    5. **See** a line chart of *Grade vs. Average Score*.
+    6. **Check** how many got a specific Grade at each Score.
+    7. **Download** a CSV with final grades.
+    8. **See** an IQR-based boxplot for outliers.
+
+    **Important**: If your CSV doesn't follow these guidelines,
+    you'll see an error message below with instructions on how to correct it.
+    ---
     """)
 
     # 1. File upload
-    uploaded_file = st.file_uploader("Upload your CSV (StudentID, Score)", type=["csv"])
+    uploaded_file = st.file_uploader("Upload your CSV (must have StudentID, Score)", type=["csv"])
+
     if not uploaded_file:
-        st.warning("Please upload a valid CSV.")
+        st.warning("Please upload a CSV file to continue.")
         return
+
+    # Safely read the CSV
     try:
         df = read_csv_data(uploaded_file)
-    except Exception as ex:
-        st.error(f"Error reading CSV: {ex}")
+    except ValueError as ex:
+        st.error(f"Error: {ex}")
+        st.info("Please make sure your CSV file is valid and try again.")
         return
 
     st.subheader("Data Preview")
@@ -239,7 +282,7 @@ def main():
         st.json(thresholds)
 
         # Show data with assigned grades
-        st.dataframe(df[["StudentID","Score","Grade"]].head())
+        st.dataframe(df[["StudentID", "Score", "Grade"]].head())
 
         # Plot Score Distribution
         plot_distribution(df, col="Score", title="Score Distribution (Absolute)")
@@ -256,7 +299,7 @@ def main():
             df,
             grade_col="Grade",
             score_col="Score",
-            all_grades=["A","B","C","D","F"],
+            all_grades=["A", "B", "C", "D", "F"],
             title="Average Score by Grade (Absolute)"
         )
 
@@ -267,7 +310,7 @@ def main():
 
         # Provide a CSV download for final results
         st.subheader("Download Final Grades (Absolute)")
-        abs_csv = convert_df_to_csv(df[["StudentID","Score","Grade"]])
+        abs_csv = convert_df_to_csv(df[["StudentID", "Score", "Grade"]])
         st.download_button(
             label="Download CSV",
             data=abs_csv,
@@ -283,7 +326,8 @@ def main():
         # Let's rename "FinalGrade" -> "Grade" to keep column naming consistent
         df_grades.rename(columns={"FinalGrade": "Grade"}, inplace=True)
 
-        st.dataframe(df_grades[["StudentID","Score","AdjustedScore","Grade"]].head())
+        # Show a sample of the data with adjusted (z-scores)
+        st.dataframe(df_grades[["StudentID", "Score", "AdjustedScore", "Grade"]].head())
 
         # Plot raw Score distribution
         plot_distribution(df_grades, col="Score", title="Raw Score Distribution (Relative)")
@@ -315,7 +359,7 @@ def main():
             df_grades,
             grade_col="Grade",
             score_col="Score",
-            all_grades=["A","B","C","D","F"],
+            all_grades=["A", "B", "C", "D", "F"],
             title="Average Score by Grade (Relative)"
         )
 
@@ -326,7 +370,7 @@ def main():
 
         # Provide a CSV download for final results
         st.subheader("Download Final Grades (Relative)")
-        rel_csv = convert_df_to_csv(df_grades[["StudentID","Score","AdjustedScore","Grade"]])
+        rel_csv = convert_df_to_csv(df_grades[["StudentID", "Score", "AdjustedScore", "Grade"]])
         st.download_button(
             label="Download CSV",
             data=rel_csv,
@@ -335,6 +379,7 @@ def main():
         )
 
     st.success("Grading and analysis completed successfully!")
+
 
 if __name__ == "__main__":
     main()

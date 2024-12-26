@@ -5,43 +5,41 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 
-# Set a more attractive Seaborn style/theme
+# -----------------------------
+# Streamlit Page Config
+# -----------------------------
+st.set_page_config(
+    page_title="Grading System App",
+    page_icon="📊",
+    layout="centered"
+)
 sns.set_theme(style='whitegrid', palette='pastel')
 
-# 1) Define helper functions
-def read_csv_data(filepath: str) -> pd.DataFrame:
+# -----------------------------
+# Helper Functions
+# -----------------------------
+def read_csv_data(uploaded_file) -> pd.DataFrame:
     """
-    Reads a CSV file containing at least two columns: 'StudentID' and 'Score'.
-    Returns a pandas DataFrame or raises an Exception if the file is missing columns.
+    Reads a CSV file containing 'StudentID' and 'Score'.
+    Raises an exception if columns are missing or file read fails.
     """
     try:
-        df = pd.read_csv(filepath)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Could not find the file: {filepath}")
+        df = pd.read_csv(uploaded_file)
     except Exception as e:
-        raise Exception(f"An error occurred while reading the CSV: {e}")
+        raise Exception(f"Error while reading the CSV: {e}")
 
-    # Basic error handling for missing columns
     required_cols = {'StudentID', 'Score'}
     if not required_cols.issubset(df.columns):
-        raise ValueError(f"CSV file must contain columns: {required_cols}")
-
+        raise ValueError(f"CSV must have columns {required_cols}")
     return df
 
 def assign_absolute_grade(score, thresholds=None):
     """
-    Assigns an absolute letter grade based on fixed numeric thresholds.
-    Example thresholds:
-    {
-        'A': 90,
-        'B': 80,
-        'C': 70,
-        'D': 60
-    }
+    Assign an absolute letter grade by numeric thresholds.
+    Defaults: A>=90, B>=80, C>=70, D>=60, else F.
     """
     if thresholds is None:
         thresholds = {'A': 90, 'B': 80, 'C': 70, 'D': 60}
-
     if score >= thresholds['A']:
         return 'A'
     elif score >= thresholds['B']:
@@ -55,56 +53,43 @@ def assign_absolute_grade(score, thresholds=None):
 
 def transform_scores_normal_curve(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Performs z-score scaling (normal-curve approach) on 'Score'.
+    Converts 'Score' into z-scores (AdjustedScore).
+    If all scores are identical, no transformation is done.
     """
     df_new = df.copy()
-    mu = df['Score'].mean()
-    sigma = df['Score'].std()
+    mean_ = df['Score'].mean()
+    std_ = df['Score'].std()
 
-    if sigma == 0:
-        # All scores are identical; no transformation
+    if std_ == 0:
+        # All scores identical, no transformation
         df_new['AdjustedScore'] = df['Score']
-        return df_new
-
-    # Standard z-score
-    z_scores = (df['Score'] - mu) / sigma
-    df_new['AdjustedScore'] = z_scores
-
+    else:
+        df_new['AdjustedScore'] = (df['Score'] - mean_) / std_
     return df_new
 
 def assign_letter_grades_from_percentiles(df: pd.DataFrame, grade_col='FinalGrade') -> pd.DataFrame:
     """
-    Assign letter grades based on the percentile of 'AdjustedScore' in a normal distribution.
-    By default:
-      - A: top 20% (percentile >= 0.80)
-      - B: next 30% (0.50 to 0.80)
-      - C: next 30% (0.20 to 0.50)
-      - D: next 10% (0.10 to 0.20)
-      - F: bottom 10% (0.00 to 0.10)
+    Assigns letter grades (A,B,C,D,F) by percentile cutoffs in a normal distribution.
     """
     df_new = df.copy()
     if 'AdjustedScore' not in df_new.columns:
-        # If no 'AdjustedScore', just copy 'Score' to 'AdjustedScore'
         df_new['AdjustedScore'] = df_new['Score']
 
-    if df_new['AdjustedScore'].nunique() == 1:
-        # If all adjusted scores are the same, assign 'C'
-        df_new[grade_col] = 'C'
-        return df_new
-
     z_scores = df_new['AdjustedScore']
+    # Convert z-scores to percentiles
     percentiles = norm.cdf(z_scores)
 
-    letter_bins = {'A': 0.80, 'B': 0.50, 'C': 0.20, 'D': 0.10, 'F': 0.00}
+    # Typical percentile cutoffs
+    cutoffs = {'A': 0.80, 'B': 0.50, 'C': 0.20, 'D': 0.10, 'F': 0.00}
     letter_grades = []
     for p in percentiles:
-        if p >= letter_bins['A']:
+        if p >= cutoffs['A']:
             letter_grades.append('A')
-        elif p >= letter_bins['B']:
+        elif p >= cutoffs['B']:
             letter_grades.append('B')
-        elif p >= letter_bins['C']:
+        elif p >= cutoffs['C']:
             letter_grades.append('C')
-        elif p >= letter_bins['D']:
+        elif p >= cutoffs['D']:
             letter_grades.append('D')
         else:
             letter_grades.append('F')
@@ -112,209 +97,244 @@ def assign_letter_grades_from_percentiles(df: pd.DataFrame, grade_col='FinalGrad
     df_new[grade_col] = letter_grades
     return df_new
 
-def assign_relative_grade_distribution(df: pd.DataFrame, 
-                                       distribution=None, 
-                                       grade_col='FinalGrade') -> pd.DataFrame:
+def plot_distribution(df, col='Score', title='Score Distribution'):
     """
-    Forces letter grades by sorting from highest to lowest 'Score' 
-    and assigning top X% to 'A', next Y% to 'B', etc., 
-    based on the given distribution.
+    Plots a histogram + KDE + (optional) normal PDF for the chosen column.
     """
-    df_new = df.copy()
+    fig, ax = plt.subplots(figsize=(7,4))
+    sns.histplot(df[col], bins=15, stat='density', color='skyblue',
+                 alpha=0.6, edgecolor='black', label='Histogram', ax=ax)
+    sns.kdeplot(df[col], color='blue', linewidth=2, label='KDE', ax=ax)
 
-    if distribution is None:
-        distribution = {'A': 0.20, 'B': 0.30, 'C': 0.30, 'D': 0.10, 'F': 0.10}
+    mean_val = df[col].mean()
+    std_val = df[col].std()
+    if std_val > 0:
+        # Theoretical Normal PDF
+        x_vals = np.linspace(df[col].min(), df[col].max(), 200)
+        pdf_vals = norm.pdf(x_vals, loc=mean_val, scale=std_val)
+        ax.plot(x_vals, pdf_vals, 'r--', lw=2, label='Normal PDF')
 
-    # Sort scores descending
-    sorted_df = df_new.sort_values(by='Score', ascending=False).reset_index(drop=True)
-    n = len(sorted_df)
-
-    # Convert percentages to counts
-    grade_counts = {}
-    for g, pct in distribution.items():
-        grade_counts[g] = int(round(pct * n))
-
-    # Correct any rounding errors to ensure total == n
-    diff = n - sum(grade_counts.values())
-    if diff != 0:
-        last_grade = list(distribution.keys())[-1]
-        grade_counts[last_grade] += diff
-
-    # Assign
-    assigned_grades = [''] * n
-    start_idx = 0
-    for g in distribution.keys():
-        count = grade_counts[g]
-        end_idx = start_idx + count
-        for i in range(start_idx, end_idx):
-            assigned_grades[i] = g
-        start_idx = end_idx
-
-    sorted_df[grade_col] = assigned_grades
-
-    # Merge back to original order
-    df_merged = pd.merge(df_new, sorted_df[['StudentID', grade_col]], on='StudentID', how='left')
-    return df_merged
-
-
-# 2) Main Streamlit App
-def main():
-    st.title("Grading System & Exploratory Analysis")
-
-    st.markdown("""
-    This Streamlit app demonstrates:
-    - How to load a CSV file with student IDs and scores
-    - How to assign absolute grades
-    - How to transform scores to a normal curve
-    - How to assign letter grades using a percentile-based approach
-    - How to assign relative letter grades using a forced distribution
-    - Basic exploratory data analysis plots
-    """)
-
-    # -- File uploader in Streamlit
-    uploaded_file = st.file_uploader("Upload CSV file with columns ['StudentID', 'Score']:",
-                                     type=["csv"])
-    if not uploaded_file:
-        st.warning("Please upload a CSV file to proceed.")
-        return
-
-    # --- Read and display data
-    df = read_csv_data(uploaded_file)
-    st.subheader("Preview of Uploaded Data")
-    st.dataframe(df.head())
-
-    # --- Basic Info
-    st.write("**Data Shape:**", df.shape)
-    st.write("**Missing Values:**")
-    st.write(df.isnull().sum())
-
-    # --- Descriptive Statistics
-    st.subheader("Descriptive Statistics")
-    st.write(df.describe())
-
-    # --- Exploratory Plots
-    numeric_cols = df.select_dtypes(include='number').columns.tolist()
-
-    st.subheader("Distribution of Numerical Columns")
-    for col in numeric_cols:
-        fig, ax = plt.subplots()
-        sns.histplot(df[col], kde=True, ax=ax, color='skyblue')
-        ax.set_title(f'Distribution of {col}')
-        st.pyplot(fig)
-
-    # --- Correlation Matrix
-    st.subheader("Correlation Matrix")
-    corr_matrix = df.corr(numeric_only=True)
-    fig, ax = plt.subplots()
-    sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', ax=ax)
+    ax.set_title(title)
+    ax.set_xlabel(col)
+    ax.set_ylabel("Density")
+    ax.legend()
     st.pyplot(fig)
 
-    # --- Statistics about Original Scores
-    mean_score = df['Score'].mean()
-    var_score = df['Score'].var()
-    std_score = df['Score'].std()
-    skew_score = df['Score'].skew()
-
-    st.subheader("Original Scores Statistics")
-    st.write(f"**Mean Score:** {mean_score:.2f}")
-    st.write(f"**Variance:** {var_score:.2f}")
-    st.write(f"**Standard Deviation:** {std_score:.2f}")
-    st.write(f"**Skewness:** {skew_score:.2f}")
-
-    # --- Plots of Original Scores
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    sns.histplot(df['Score'], kde=True, ax=axes[0], color='skyblue')
-    axes[0].set_title("Histogram of Original Scores", fontsize=14)
-    axes[0].set_xlabel("Score")
-    axes[0].set_ylabel("Count")
-
-    sns.kdeplot(df['Score'], fill=True, ax=axes[1], color='lightcoral')
-    axes[1].set_title("Density Plot of Original Scores", fontsize=14)
-    axes[1].set_xlabel("Score")
-    axes[1].set_ylabel("Density")
-
-    plt.tight_layout()
-    st.pyplot(fig)
-
-    # --- Choose Grading Method
-    grading_method = st.selectbox("Select Grading Method", ["absolute", "relative"])
-    relative_approach = st.selectbox("Select Relative Approach", ["normal_curve", "forced_distribution"])
-
-    abs_thresholds = {'A': 90, 'B': 80, 'C': 70, 'D': 60}
-    rel_distribution = {'A': 0.20, 'B': 0.30, 'C': 0.30, 'D': 0.10, 'F': 0.10}
-
-    df_grading = df.copy()
-
-    if grading_method == 'absolute':
-        df_grading['Grade'] = df_grading['Score'].apply(assign_absolute_grade, thresholds=abs_thresholds)
-        df_grading['AdjustedScore'] = df_grading['Score']
-    else:
-        if relative_approach == 'normal_curve':
-            df_transformed = transform_scores_normal_curve(df_grading)
-            df_final = assign_letter_grades_from_percentiles(df_transformed, grade_col='Grade')
-            df_grading = df_final.copy()
-        else:
-            df_final = assign_relative_grade_distribution(
-                df_grading, distribution=rel_distribution, grade_col='Grade'
-            )
-            df_final['AdjustedScore'] = df_final['Score']
-            df_grading = df_final.copy()
-
-    # --- Final Grade Distribution
-    st.subheader(f"Final Grade Distribution: {grading_method.capitalize()} Method")
-    final_counts = df_grading['Grade'].value_counts().sort_index()
-
-    # Show distribution in text
-    for g, cnt in final_counts.items():
-        st.write(f"Grade {g}: {cnt} students")
-
-    # Bar plot of final grade distribution
-    fig, ax = plt.subplots(figsize=(8, 5))
-    sns.barplot(x=final_counts.index, y=final_counts.values, color='salmon', ax=ax)
-    ax.set_title(f"Final Grade Distribution ({grading_method.capitalize()})", fontsize=14)
+def plot_grade_distribution(df, grade_col='Grade', title='Grade Distribution'):
+    """
+    Bar chart showing how many students got each grade.
+    """
+    fig, ax = plt.subplots(figsize=(6,4))
+    order = sorted(df[grade_col].unique())
+    sns.countplot(x=grade_col, data=df, order=order, color='salmon', ax=ax)
+    ax.set_title(title)
     ax.set_xlabel("Grade")
     ax.set_ylabel("Count")
     st.pyplot(fig)
 
-    # If we have an AdjustedScore column, show distribution
-    if 'AdjustedScore' in df_grading.columns:
-        st.subheader("Adjusted Scores Analysis")
-        adj_mean = df_grading['AdjustedScore'].mean()
-        adj_std = df_grading['AdjustedScore'].std()
+def plot_grade_vs_score(df, grade_col='Grade', score_col='Score',
+                        all_grades=None, title='Average Score by Grade'):
+    """
+    Plots a line chart: X=Grade, Y=Average Score.
+    """
+    if all_grades is None:
+        all_grades = sorted(df[grade_col].unique())
 
-        st.write(f"**Adjusted Mean:** {adj_mean:.2f}")
-        st.write(f"**Adjusted Std:** {adj_std:.2f}")
+    # Safely compute average score for each grade
+    means = df.groupby(grade_col)[score_col].mean().reindex(all_grades)
+    means = means.dropna()  # remove missing if a grade wasn't assigned
 
-        fig2, axes2 = plt.subplots(1, 2, figsize=(12, 5))
-        sns.histplot(df_grading['AdjustedScore'], kde=True, ax=axes2[0], color='blueviolet')
-        axes2[0].set_title("Histogram of Adjusted Scores", fontsize=14)
-        axes2[0].set_xlabel("AdjustedScore")
-        axes2[0].set_ylabel("Count")
-
-        sns.kdeplot(df_grading['AdjustedScore'], fill=True, ax=axes2[1], color='goldenrod')
-        axes2[1].set_title("Density Plot of Adjusted Scores", fontsize=14)
-        axes2[1].set_xlabel("AdjustedScore")
-        axes2[1].set_ylabel("Density")
-
-        plt.tight_layout()
-        st.pyplot(fig2)
-
-    # Compare to absolute grading
-    df_abs_compare = df.copy()
-    df_abs_compare['AbsGrade'] = df_abs_compare['Score'].apply(assign_absolute_grade, thresholds=abs_thresholds)
-
-    merged = pd.merge(
-        df_abs_compare[['StudentID', 'AbsGrade']],
-        df_grading[['StudentID', 'Grade']],
-        on='StudentID',
-        how='left'
+    fig, ax = plt.subplots(figsize=(6,4))
+    sns.lineplot(
+        x=means.index,
+        y=means.values,
+        marker='o',
+        color='purple',
+        linewidth=2,
+        ax=ax
     )
-    merged['Changed'] = merged['AbsGrade'] != merged['Grade']
-    changed_count = merged['Changed'].sum()
+    ax.set_title(title)
+    ax.set_xlabel("Grade")
+    ax.set_ylabel(f"Average {score_col}")
+    ax.set_ylim(0, 100)
+    st.pyplot(fig)
 
-    st.write(f"Number of students whose grade changed compared to absolute grading: {changed_count}")
+def plot_iqr_boxplot(df, col='Score', title='Box Plot - Outliers based on IQR'):
+    """
+    Plots a boxplot based on the IQR for the chosen column,
+    to visualize outliers and how they might be handled.
+    """
+    fig, ax = plt.subplots(figsize=(6,4))
+
+    # Calculate IQR
+    q1 = df[col].quantile(0.25)
+    q3 = df[col].quantile(0.75)
+    iqr = q3 - q1
+    lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
+
+    # Annotate the plot with IQR details
+    sns.boxplot(
+        y=df[col],
+        ax=ax,
+        color='skyblue'
+    )
+    ax.axhline(lower_bound, color='red', linestyle='--', label=f'Lower Bound = {lower_bound:.2f}')
+    ax.axhline(upper_bound, color='red', linestyle='--', label=f'Upper Bound = {upper_bound:.2f}')
+    ax.set_title(title)
+    ax.legend()
+
+    st.pyplot(fig)
+
+def convert_df_to_csv(df: pd.DataFrame) -> str:
+    """
+    Convert a DataFrame to CSV for download.
+    """
+    return df.to_csv(index=False)
+
+# -----------------------------
+# Main Streamlit App
+# -----------------------------
+def main():
+    st.title("📊 Grading System: Absolute vs. Relative Grading")
+
+    st.markdown("""
+    This app lets you:
+    1. **Upload** a CSV with **StudentID** and **Score**.
+    2. **Choose** Absolute or Relative grading.
+    3. **View** distribution plots and final grade counts.
+    4. **See** a line chart of *Grade vs. Average Score*.
+    5. **Check** how many got a specific Grade at each Score.
+    6. **Download** a CSV with final grades.
+    7. **See** an IQR-based boxplot for outliers.
+    """)
+
+    # 1. File upload
+    uploaded_file = st.file_uploader("Upload your CSV (StudentID, Score)", type=["csv"])
+    if not uploaded_file:
+        st.warning("Please upload a valid CSV.")
+        return
+    try:
+        df = read_csv_data(uploaded_file)
+    except Exception as ex:
+        st.error(f"Error reading CSV: {ex}")
+        return
+
+    st.subheader("Data Preview")
+    st.dataframe(df.head())
+
+    # 2. Choose Grading Method
+    grading_method = st.selectbox(
+        "Choose a Grading Method",
+        ["Absolute Grading", "Relative Grading"]
+    )
+
+    # 3. Branch: Absolute vs. Relative
+    if grading_method == "Absolute Grading":
+        st.subheader("Absolute Grading")
+        thresholds = {'A': 90, 'B': 80, 'C': 70, 'D': 60}
+        df["Grade"] = df["Score"].apply(assign_absolute_grade, thresholds=thresholds)
+
+        st.write("Grades assigned based on these **absolute thresholds**:")
+        st.json(thresholds)
+
+        # Show data with assigned grades
+        st.dataframe(df[["StudentID","Score","Grade"]].head())
+
+        # Plot Score Distribution
+        plot_distribution(df, col="Score", title="Score Distribution (Absolute)")
+
+        # Boxplot with IQR
+        st.subheader("IQR Boxplot (Absolute Grading)")
+        plot_iqr_boxplot(df, col="Score", title="Outlier Detection via IQR (Absolute)")
+
+        # Grade Distribution
+        plot_grade_distribution(df, grade_col="Grade", title="Grade Distribution (Absolute)")
+
+        # Grade vs. Score Plot
+        plot_grade_vs_score(
+            df,
+            grade_col="Grade",
+            score_col="Score",
+            all_grades=["A","B","C","D","F"],
+            title="Average Score by Grade (Absolute)"
+        )
+
+        # Show how many got a specific grade at each score
+        st.subheader("Grade vs. Score Details (Absolute)")
+        abs_counts = df.groupby(["Grade", "Score"]).size().reset_index(name="Count")
+        st.dataframe(abs_counts)
+
+        # Provide a CSV download for final results
+        st.subheader("Download Final Grades (Absolute)")
+        abs_csv = convert_df_to_csv(df[["StudentID","Score","Grade"]])
+        st.download_button(
+            label="Download CSV",
+            data=abs_csv,
+            file_name="absolute_grades.csv",
+            mime="text/csv"
+        )
+
+    else:
+        st.subheader("Relative Grading")
+        df_transformed = transform_scores_normal_curve(df)
+        df_grades = assign_letter_grades_from_percentiles(df_transformed, grade_col="FinalGrade")
+
+        # Let's rename "FinalGrade" -> "Grade" to keep column naming consistent
+        df_grades.rename(columns={"FinalGrade": "Grade"}, inplace=True)
+
+        st.dataframe(df_grades[["StudentID","Score","AdjustedScore","Grade"]].head())
+
+        # Plot raw Score distribution
+        plot_distribution(df_grades, col="Score", title="Raw Score Distribution (Relative)")
+
+        # Boxplot with IQR
+        st.subheader("IQR Boxplot (Relative Grading)")
+        plot_iqr_boxplot(df_grades, col="Score", title="Outlier Detection via IQR (Relative)")
+
+        # Plot Adjusted (z-score) distribution
+        st.write("**Adjusted Score (Z-Score) Distribution**")
+        fig, ax = plt.subplots(figsize=(8,4))
+        sns.histplot(df_grades["AdjustedScore"], bins=15, stat="density",
+                     color="skyblue", alpha=0.6, edgecolor="black", ax=ax, label="Histogram")
+        sns.kdeplot(df_grades["AdjustedScore"], color="blue", lw=2, ax=ax, label="KDE")
+        x_vals = np.linspace(-4, 4, 200)
+        ax.plot(x_vals, norm.pdf(x_vals, 0, 1), 'r--', lw=2, label="Std Normal PDF")
+        ax.set_title("Distribution of Adjusted Scores (Z-Scores)")
+        ax.set_xlabel("Adjusted Score")
+        ax.set_ylabel("Density")
+        ax.legend()
+        st.pyplot(fig)
+
+        # Grade Distribution
+        plot_grade_distribution(df_grades, grade_col="Grade", 
+                                title="Final Grade Distribution (Relative)")
+
+        # Grade vs. Score Plot
+        plot_grade_vs_score(
+            df_grades,
+            grade_col="Grade",
+            score_col="Score",
+            all_grades=["A","B","C","D","F"],
+            title="Average Score by Grade (Relative)"
+        )
+
+        # Show how many got a specific grade at each score
+        st.subheader("Grade vs. Score Details (Relative)")
+        rel_counts = df_grades.groupby(["Grade", "Score"]).size().reset_index(name="Count")
+        st.dataframe(rel_counts)
+
+        # Provide a CSV download for final results
+        st.subheader("Download Final Grades (Relative)")
+        rel_csv = convert_df_to_csv(df_grades[["StudentID","Score","AdjustedScore","Grade"]])
+        st.download_button(
+            label="Download CSV",
+            data=rel_csv,
+            file_name="relative_grades.csv",
+            mime="text/csv"
+        )
+
     st.success("Grading and analysis completed successfully!")
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
